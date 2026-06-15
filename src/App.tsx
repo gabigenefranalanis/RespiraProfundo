@@ -26,6 +26,10 @@ export default function App() {
   // Authentication & Navigation states
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [registerName, setRegisterName] = useState("");
+  const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
+  const [showPlansModal, setShowPlansModal] = useState(false); // For logged-in users who want to buy a plan
   const [currentView, setCurrentView] = useState("calendar"); // default for student, will override to metrics for admin
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
@@ -154,7 +158,21 @@ export default function App() {
         setIsLoggedIn(true);
         setCurrentUser(matchedUser);
         setCurrentView(matchedUser.rol === "admin" ? "metrics" : "calendar");
-        triggerAlert(`✨ ¡Bienvenido de vuelta, ${matchedUser.nombre}!`);
+        
+        let planAction = "";
+        if (selectedPlanId && matchedUser.rol === "alumno") {
+          try {
+            await fetch("/api/me/subscribe", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId: matchedUser.id, packageId: selectedPlanId }),
+            });
+            planAction = " Tu membresía ha sido adquirida.";
+            setSelectedPlanId(null);
+          } catch(e) {}
+        }
+        
+        triggerAlert(`✨ ¡Bienvenido de vuelta, ${matchedUser.nombre}!${planAction}`);
         await loadData(matchedUser.id);
       } else {
         setLoginError("Error al sincronizar sesión con el servidor.");
@@ -162,6 +180,69 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setLoginError("Hubo un error de red al intentar iniciar sesión.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setLoginError("");
+
+    if (!registerName.trim() || !loginEmail.trim()) {
+      setLoginError("Por favor completa nombre y correo.");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nombre: registerName, email: loginEmail }),
+      });
+      const data = await res.json();
+
+      if (data.error) {
+        setLoginError(data.error);
+        setLoading(false);
+        return;
+      }
+
+      // Automatically login
+      const newUser = data.user;
+      const selectRes = await fetch("/api/select-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: newUser.id }),
+      });
+      const selectData = await selectRes.json();
+      if (selectData.success) {
+        localStorage.setItem("respira_logged_in_email", newUser.email);
+        setIsLoggedIn(true);
+        setCurrentUser(newUser);
+        setCurrentView("calendar"); // always 'alumno'
+        
+        let planAction = "Tu cuenta ha sido creada.";
+        if (selectedPlanId) {
+          try {
+            await fetch("/api/me/subscribe", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId: newUser.id, packageId: selectedPlanId }),
+            });
+            planAction = "Tu cuenta y plan han sido activados.";
+            setSelectedPlanId(null);
+          } catch(e) {}
+        }
+        
+        triggerAlert(`✨ ¡Bienvenido/a, ${newUser.nombre}! ${planAction}`);
+        await loadData(newUser.id);
+      }
+    } catch (err) {
+      console.error(err);
+      setLoginError("Error al registrar cuenta.");
     } finally {
       setLoading(false);
     }
@@ -187,7 +268,21 @@ export default function App() {
         setIsLoggedIn(true);
         setCurrentUser(matchedUser);
         setCurrentView(matchedUser.rol === "admin" ? "metrics" : "calendar");
-        triggerAlert(`✨ Iniciando sesión como ${matchedUser.nombre}...`);
+        
+        let planAction = "";
+        if (selectedPlanId && matchedUser.rol === "alumno") {
+           try {
+              await fetch("/api/me/subscribe", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ userId: matchedUser.id, packageId: selectedPlanId }),
+              });
+              planAction = " Se ha aplicado el plan seleccionado.";
+              setSelectedPlanId(null);
+           } catch(e) {}
+        }
+        
+        triggerAlert(`✨ Iniciando sesión como ${matchedUser.nombre}...${planAction}`);
         await loadData(matchedUser.id);
       }
     } catch (err) {
@@ -322,12 +417,7 @@ export default function App() {
   // Renew current student membership quickly for testing
   const handleRenewPackage = async () => {
     if (!currentUser) return;
-    try {
-      triggerAlert("🎉 Paquete renovado con éxito! Se han asignado 10 nuevas clases en tu cuenta.");
-      await loadData(currentUser.id);
-    } catch (err) {
-      console.error(err);
-    }
+    setShowPlansModal(true);
   };
 
   const instructorsList = systemUsers.filter(u => u.rol === "instructor");
@@ -346,8 +436,10 @@ export default function App() {
           <LandingPage 
             onLoginClick={() => setShowLogin(true)} 
             onSelectPlan={(planId) => {
+              setSelectedPlanId(planId);
+              setIsRegisterMode(true);
               setShowLogin(true);
-              triggerAlert("Para adquirir esta membresía, inicia sesión con un correo registrado en el portal.", "success");
+              triggerAlert("Crea tu cuenta para confirmar y adquirir la membresía seleccionada.", "success");
             }} 
           />
         </>
@@ -367,7 +459,7 @@ export default function App() {
 
         {/* Botón de retroceso a la landing page */}
         <button
-          onClick={() => setShowLogin(false)}
+          onClick={() => { setShowLogin(false); setSelectedPlanId(null); }}
           id="back-to-landing-btn"
           className="mb-6 flex items-center gap-2 text-xs font-bold text-gray-500 hover:text-[#80487b] bg-white hover:bg-pink-50/40 px-5 py-2.5 rounded-full border border-pink-105 shadow-sm transition-all cursor-pointer"
         >
@@ -391,7 +483,23 @@ export default function App() {
             Yoga & Meditación Studio
           </p>
 
-          <form onSubmit={handleLoginSubmit} className="space-y-4 text-left">
+          <form onSubmit={isRegisterMode ? handleRegisterSubmit : handleLoginSubmit} className="space-y-4 text-left">
+            {isRegisterMode && (
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider">
+                  Nombre Completo
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={registerName}
+                  onChange={(e) => setRegisterName(e.target.value)}
+                  placeholder="Ej. Juan Pérez"
+                  className="w-full text-xs p-3.5 rounded-2xl border border-gray-100 outline-none focus:border-[#80487b] focus:ring-1 focus:ring-[#80487b] bg-gray-50 focus:bg-white transition-all font-medium"
+                />
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider">
                 Correo Electrónico
@@ -418,9 +526,35 @@ export default function App() {
               disabled={loading}
               className="w-full py-3.5 bg-[#80487b] hover:bg-[#80487b]/90 text-white font-bold text-xs rounded-2xl transition-all shadow-md hover:shadow-lg disabled:bg-gray-200 disabled:text-gray-400"
             >
-              {loading ? "Sintonizando entorno..." : "Iniciar Sesión"}
+              {loading ? "Procesando..." : (isRegisterMode ? "Registrar Cuenta" : "Iniciar Sesión")}
             </button>
           </form>
+
+          <div className="mt-6 text-xs text-gray-500">
+            {isRegisterMode ? (
+              <p>
+                ¿Ya eres alumno?{" "}
+                <button
+                  type="button"
+                  onClick={() => { setIsRegisterMode(false); setLoginError(""); }}
+                  className="text-[#80487b] font-bold hover:underline py-1"
+                >
+                  Inicia sesión aquí
+                </button>
+              </p>
+            ) : (
+              <p>
+                ¿No tienes cuenta?{" "}
+                <button
+                  type="button"
+                  onClick={() => { setIsRegisterMode(true); setLoginError(""); }}
+                  className="text-[#80487b] font-bold hover:underline py-1"
+                >
+                  Regístrate como alumno
+                </button>
+              </p>
+            )}
+          </div>
 
           {/* Cuentas de Demostración */}
           <div className="mt-8 pt-6 border-t border-gray-100 text-left">
@@ -942,6 +1076,57 @@ export default function App() {
         </footer>
 
       </main>
+
+      {/* PLANS MODAL */}
+      {showPlansModal && (
+        <div className="fixed inset-0 z-[100] bg-white/60 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl border border-pink-100 max-w-2xl w-full p-8 relative animate-scale-in">
+            <button
+              onClick={() => setShowPlansModal(false)}
+              className="absolute top-6 right-6 text-gray-400 hover:text-gray-600 bg-gray-50 hover:bg-gray-100 rounded-full p-2 transition-all"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <h3 className="font-sans font-black text-2xl text-gray-800 mb-2">Selecciona un Plan</h3>
+            <p className="text-xs text-gray-500 mb-8">
+              Nuestras membresías se cotizan en pesos chilenos (CLP).
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {[
+                { id: 1, name: "Pack 10", price: "$45.000", classes: "10 Clases" },
+                { id: 2, name: "Pack 20", price: "$75.000", classes: "20 Clases", popular: true },
+                { id: 3, name: "Ilimitado", price: "$110.000", classes: "Clases Ilimitadas" }
+              ].map(plan => (
+                <div 
+                  key={plan.id}
+                  onClick={async () => {
+                    try {
+                      await fetch("/api/me/subscribe", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ userId: currentUser?.id, packageId: plan.id }),
+                      });
+                      triggerAlert(`¡Has adquirido el plan ${plan.name} exitosamente!`);
+                      if(currentUser) loadData(currentUser.id);
+                      setShowPlansModal(false);
+                    } catch(e) {}
+                  }}
+                  className={`cursor-pointer rounded-2xl p-6 border transition-all text-center flex flex-col justify-between ${
+                    plan.popular ? "bg-[#80487b]/5 border-[#80487b] hover:shadow-md" : "bg-white border-gray-100 hover:border-pink-200"
+                  }`}
+                >
+                  {plan.popular && <span className="text-[9px] font-black uppercase text-[#80487b] tracking-wider mb-2 block">★ Más Elegido</span>}
+                  <h4 className="font-extrabold text-gray-800 text-lg">{plan.name}</h4>
+                  <span className="text-[#80487b] font-black text-xl my-4 block">{plan.price}</span>
+                  <span className="text-xs font-semibold text-gray-500">{plan.classes}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

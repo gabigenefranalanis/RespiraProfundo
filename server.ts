@@ -186,6 +186,33 @@ async function startServer() {
     res.json({ success: true, user });
   });
 
+  // Registrar nuevo alumno
+  app.post("/api/register", (req, res) => {
+    const db = readDatabase();
+    const { nombre, email } = req.body;
+
+    if (!nombre || !email) {
+      return res.status(400).json({ error: "Nombre y email son requeridos." });
+    }
+
+    const existingUser = db.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    if (existingUser) {
+      return res.status(400).json({ error: "El email ya está registrado." });
+    }
+
+    const newUserId = Math.max(...db.users.map((u) => u.id)) + 1;
+    const newUser: User = {
+      id: newUserId,
+      nombre,
+      email,
+      rol: "alumno",
+    };
+
+    db.users.push(newUser);
+    writeDatabase(db);
+    res.json({ success: true, user: newUser });
+  });
+
   // === MÓDULO DE ALUMNO (API CONTRACT) ===
 
   // GET /api/me/status: Saldo y vencimiento del alumno
@@ -232,6 +259,42 @@ async function startServer() {
         };
       }),
     });
+  });
+
+  // POST /api/me/subscribe: Contratar un plan
+  app.post("/api/me/subscribe", (req, res) => {
+    const { userId, packageId } = req.body;
+    if (!userId || !packageId) {
+      return res.status(400).json({ error: "Faltan datos de suscripción." });
+    }
+    const db = readDatabase();
+    
+    const user = db.users.find(u => u.id === userId);
+    if (!user) return res.status(404).json({ error: "Usuario no encontrado." });
+
+    const pkg = db.packages.find((p) => p.id === parseInt(packageId));
+    if (!pkg) return res.status(404).json({ error: "Paquete no encontrado." });
+
+    // Remove old membership if any
+    db.memberships = db.memberships.filter(m => m.user_id !== userId);
+
+    const newMembershipId = db.memberships.length > 0 ? Math.max(...db.memberships.map((m) => m.id)) + 1 : 1;
+    const dateVenc = new Date();
+    dateVenc.setDate(dateVenc.getDate() + 30);
+    const formattedDate = dateVenc.toISOString().split("T")[0];
+
+    const newMembership: Membership = {
+      id: newMembershipId,
+      user_id: user.id,
+      package_id: pkg.id,
+      clases_restantes: pkg.cantidad_clases,
+      fecha_vencimiento: formattedDate,
+      estado: "activo",
+    };
+
+    db.memberships.push(newMembership);
+    writeDatabase(db);
+    res.json({ success: true, membership: newMembership });
   });
 
   // GET /api/classes/available: Lista las clases en general o filtrando
@@ -643,20 +706,20 @@ async function startServer() {
 
 
   // === VITE MIDDLEWARE CONFIGURATION ===
-  if (process.env.DISABLE_HMR === "true") {
-    // Si HMR está desactivado o en build de producción
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  } else {
+  if (process.env.NODE_ENV !== "production") {
     // En desarrollo dinámico, Vite maneja los archivos estáticos
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
+  } else {
+    // En producción (build), Express sirve los archivos estáticos desde dist
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
   }
 
   // Escuchar servidor
