@@ -1,0 +1,6 @@
+{
+  "name": "Respira Profundo",
+  "description": "Plataforma de gestión de clases, reservas y dashboard administrativo para el estudio de yoga Respira Profundo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
