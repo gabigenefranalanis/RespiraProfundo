@@ -48,14 +48,27 @@ export default function App() {
     setTimeout(() => setAlert(null), 5000);
   };
 
+  const [dbError, setDbError] = useState<string>("");
+
   // Fetch all necessary data on load and session sync
   const loadData = async (targetUserId?: number) => {
     setLoading(true);
+    setDbError("");
     try {
       // 1. Fetch all users first for auth checking & instructors list
       const usersRes = await fetch("/api/users");
-      const usersData = await usersRes.json();
-      const usersList: User[] = usersData || [];
+      let usersData;
+      try {
+        usersData = await usersRes.json();
+      } catch (e) {
+        setDbError("Error de comunicación de red (502 Bad Gateway). La Base de Datos rechazó la conexión. Si usas Supabase, asegúrate de activar el Pooler de conexiones (IPv4) en los ajustes, ya que no soporta IPv6 directo.");
+        return;
+      }
+      
+      if (!Array.isArray(usersData) && usersData?.error) {
+        setDbError(usersData.error + " Revisa la cadena de conexión de Supabase y codifica tu contraseña si tiene símbolos (ej: @ => %40).");
+      }
+      const usersList: User[] = Array.isArray(usersData) ? usersData : [];
       setSystemUsers(usersList);
 
       // Determine active user ID
@@ -84,9 +97,11 @@ export default function App() {
       // 2. Fetch current student status
       const userRes = await fetch("/api/me/status");
       const userData = await userRes.json();
+      let currentMembership = null;
       if (userData && !userData.error) {
         setCurrentUser(userData.user);
         setMembership(userData.membership);
+        currentMembership = userData.membership;
         setReservesCount(userData.reserves_count);
         setBookingHistory(userData.bookings || []);
       }
@@ -94,20 +109,22 @@ export default function App() {
       // 3. Fetch classes available
       const classRes = await fetch("/api/classes/available");
       const classData = await classRes.json();
-      setScheduleList(classData || []);
+      setScheduleList(Array.isArray(classData) ? classData : []);
 
       // 4. Fetch administrative stats
       const statsRes = await fetch("/api/admin/stats");
       const statsData = await statsRes.json();
       if (statsData && statsData.metrics) {
         setAdminMetrics(statsData.metrics);
-        setDemandRanking(statsData.demandRanking || []);
+        setDemandRanking(Array.isArray(statsData.demandRanking) ? statsData.demandRanking : []);
       }
 
       // 5. Fetch administrative bookings
       const adminBookingsRes = await fetch("/api/admin/bookings");
       const adminBookingsData = await adminBookingsRes.json();
-      setAdminBookings(adminBookingsData || []);
+      setAdminBookings(Array.isArray(adminBookingsData) ? adminBookingsData : []);
+
+      return { membership: currentMembership };
 
     } catch (err) {
       console.error("Error loading server-side api state:", err);
@@ -135,12 +152,18 @@ export default function App() {
       // Re-fetch users list
       const usersRes = await fetch("/api/users");
       const usersData = await usersRes.json();
-      const usersList: User[] = usersData || [];
+      const usersList: User[] = Array.isArray(usersData) ? usersData : [];
       setSystemUsers(usersList);
 
       const matchedUser = usersList.find(u => u.email.trim().toLowerCase() === loginEmail.trim().toLowerCase());
       if (!matchedUser) {
         setLoginError("Este correo electrónico no se encuentra registrado.");
+        setLoading(false);
+        return;
+      }
+      
+      if (matchedUser.status === 'bloqueado') {
+        setLoginError("Esta cuenta ha sido bloqueada. Por favor, contacta a administración.");
         setLoading(false);
         return;
       }
@@ -173,7 +196,14 @@ export default function App() {
         }
         
         triggerAlert(`✨ ¡Bienvenido de vuelta, ${matchedUser.nombre}!${planAction}`);
-        await loadData(matchedUser.id);
+        const dataInfo = await loadData(matchedUser.id);
+        
+        if (matchedUser.rol === "alumno") {
+          const m = dataInfo?.membership;
+          if (!m || m.estado === "vencida") {
+            setShowPlansModal(true);
+          }
+        }
       } else {
         setLoginError("Error al sincronizar sesión con el servidor.");
       }
@@ -238,7 +268,14 @@ export default function App() {
         }
         
         triggerAlert(`✨ ¡Bienvenido/a, ${newUser.nombre}! ${planAction}`);
-        await loadData(newUser.id);
+        const dataInfo = await loadData(newUser.id);
+        
+        if (newUser.rol === "alumno") {
+          const m = dataInfo?.membership;
+          if (!m || m.estado === "vencida") {
+            setShowPlansModal(true);
+          }
+        }
       }
     } catch (err) {
       console.error(err);
@@ -256,9 +293,14 @@ export default function App() {
     try {
       const usersRes = await fetch("/api/users");
       const usersData = await usersRes.json();
-      const usersList: User[] = usersData || [];
+      const usersList: User[] = Array.isArray(usersData) ? usersData : [];
       const matchedUser = usersList.find(u => u.email.toLowerCase() === email.toLowerCase());
       if (matchedUser) {
+        if (matchedUser.status === 'bloqueado') {
+          triggerAlert("Esta cuenta ha sido bloqueada. Por favor, contacta a administración.", "error");
+          setLoading(false);
+          return;
+        }
         await fetch("/api/select-user", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -283,7 +325,14 @@ export default function App() {
         }
         
         triggerAlert(`✨ Iniciando sesión como ${matchedUser.nombre}...${planAction}`);
-        await loadData(matchedUser.id);
+        const dataInfo = await loadData(matchedUser.id);
+        
+        if (matchedUser.rol === "alumno") {
+          const m = dataInfo?.membership;
+          if (!m || m.estado === "vencida") {
+            setShowPlansModal(true);
+          }
+        }
       }
     } catch (err) {
       console.error(err);
@@ -350,21 +399,21 @@ export default function App() {
   };
 
   // Mark attendance (Admin action - trigger simulator)
-  const handleMarkAttendance = async (bookingId: number, asistencia: boolean) => {
+  const handleMarkAttendance = async (bookingId: number, status: 'presente' | 'falta' | 'pendiente') => {
     try {
       const res = await fetch("/api/admin/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bookingId, asistencia }),
+        body: JSON.stringify({ bookingId, status }),
       });
       const data = await res.json();
       if (data.error) {
         triggerAlert(data.error, "error");
       } else {
         triggerAlert(
-          asistencia 
+          status === 'presente'
             ? "✓ Asistencia tomada. Clase deducida de la membresía del alumno." 
-            : "✓ Asistencia cancelada. Clase devuelta al alumno."
+            : "✓ Asistencia cancelada/actualizada. Clase devuelta al alumno (si correspondía)."
         );
         await loadData(currentUser?.id);
       }
@@ -375,42 +424,74 @@ export default function App() {
   };
 
   // Register a new student
-  const handleAddStudent = async (nombre: string, email: string, packageId: number): Promise<boolean> => {
+  const handleAddStudent = async (payload: any): Promise<boolean> => {
     try {
       const res = await fetch("/api/admin/add-student", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nombre, email, packageId }),
+        body: JSON.stringify({ nombre: payload.nombre, email: payload.email, packageId: payload.packageId || 2 }),
       });
       const data = await res.json();
       if (data.success) {
+        triggerAlert("Alumno creado exitosamente.");
         await loadData(currentUser?.id);
         return true;
       }
+      triggerAlert(data.error || "Error al crear alumno", "error");
       return false;
     } catch (err) {
       console.error(err);
+      triggerAlert("Error de red al crear alumno", "error");
       return false;
     }
   };
 
   // Add scheduled classes
-  const handleAddClass = async (nombreClase: string, instructorId: number, diaSemana: string, horaInicio: string, cupoMaximo: number): Promise<boolean> => {
+  const handleAddClass = async (payload: any): Promise<boolean> => {
     try {
       const res = await fetch("/api/admin/add-class", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nombreClase, instructorId, diaSemana, horaInicio, cupoMaximo }),
+        body: JSON.stringify({ 
+          nombreClase: payload.nombreClase, 
+          instructorId: payload.instructorId, 
+          diaSemana: payload.diaSemana, 
+          horaInicio: payload.horaInicio, 
+          cupoMaximo: payload.cupoMaximo 
+        }),
       });
       const data = await res.json();
       if (data.success) {
+        triggerAlert("Clase programada exitosamente.");
         await loadData(currentUser?.id);
         return true;
       }
+      triggerAlert(data.error || "Error al programar clase", "error");
       return false;
     } catch (err) {
       console.error(err);
+      triggerAlert("Error de red al programar clase", "error");
       return false;
+    }
+  };
+
+  const handleUpdateUserStatus = async (userId: number, status: string) => {
+    try {
+      const res = await fetch("/api/admin/user-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, status })
+      });
+      const data = await res.json();
+      if (data.success) {
+        triggerAlert("Estado del usuario actualizado correctamente");
+        await loadData(currentUser?.id);
+      } else {
+        triggerAlert(data.error || "Error al actualizar estado del usuario", "error");
+      }
+    } catch (err) {
+      console.error(err);
+      triggerAlert("Error de red al actualizar estado", "error");
     }
   };
 
@@ -421,6 +502,28 @@ export default function App() {
   };
 
   const instructorsList = systemUsers.filter(u => u.rol === "instructor");
+
+  if (dbError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-white p-6">
+        <div className="max-w-md w-full bg-red-950/40 border border-red-500/50 rounded-xl p-6 text-center">
+          <div className="text-red-400 mb-4">
+            <svg className="w-12 h-12 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-medium mb-2">Error de Base de Datos</h2>
+          <p className="text-sm text-red-200/80 mb-6">{dbError}</p>
+          <button 
+            onClick={() => loadData()}
+            className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
+          >
+            Reintentar Conexión
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // RENDER METHOD 1: LANDING PAGE or LOGIN SCREEN
   if (!isLoggedIn) {
@@ -960,6 +1063,7 @@ export default function App() {
                   onMarkAttendance={handleMarkAttendance}
                   onAddStudent={handleAddStudent}
                   onAddClass={handleAddClass}
+                  onUpdateUserStatus={handleUpdateUserStatus}
                   instructors={instructorsList}
                   onRefresh={loadData}
                   activeTab={currentView as any}
@@ -1081,16 +1185,23 @@ export default function App() {
       {showPlansModal && (
         <div className="fixed inset-0 z-[100] bg-white/60 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl shadow-2xl border border-pink-100 max-w-2xl w-full p-8 relative animate-scale-in">
-            <button
-              onClick={() => setShowPlansModal(false)}
-              className="absolute top-6 right-6 text-gray-400 hover:text-gray-600 bg-gray-50 hover:bg-gray-100 rounded-full p-2 transition-all"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            {!(currentUser?.rol === "alumno" && (!membership || membership.estado === "vencida")) && (
+              <button
+                onClick={() => setShowPlansModal(false)}
+                className="absolute top-6 right-6 text-gray-400 hover:text-gray-600 bg-gray-50 hover:bg-gray-100 rounded-full p-2 transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
 
-            <h3 className="font-sans font-black text-2xl text-gray-800 mb-2">Selecciona un Plan</h3>
-            <p className="text-xs text-gray-500 mb-8">
-              Nuestras membresías se cotizan en pesos chilenos (CLP).
+            <h3 className="font-sans font-black text-2xl text-[#80487b] mb-2">
+               {(currentUser?.rol === "alumno" && (!membership || membership.estado === "vencida")) 
+                 ? "Renueva tu Membresía para Continuar" 
+                 : "Selecciona un Plan"}
+            </h3>
+            <p className="text-xs text-gray-500 mb-8 font-medium">
+              Nuestras membresías se cotizan en pesos chilenos (CLP). 
+              {(currentUser?.rol === "alumno" && (!membership || membership.estado === "vencida")) && " Es necesario contar con un plan activo para acceder al sistema."}
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
