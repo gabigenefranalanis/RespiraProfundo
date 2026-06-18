@@ -132,9 +132,9 @@ export default function LandingPage({ onLoginClick, onSelectPlan }: LandingPageP
 
           <div className="grid md:grid-cols-3 gap-8">
             {[
-              { id: 1, name: "Clase Suelta", price: "$4.000", classes: 1, text: "Para visitas ocasionales y probar la experiencia.", popular: false },
-              { id: 2, name: "Plan Básico", price: "$15.000", classes: 4, text: "Ideal para comprometerte y venir 1 vez por semana.", popular: true },
-              { id: 3, name: "Plan Full", price: "$25.000", classes: 8, text: "Para alumnos dedicados que buscan ritmo 2 veces a la semana.", popular: false }
+              { id: 1, name: "Pack 10", price: "$45.000", classes: 10, text: "Ideal para venir 1-2 veces por semana y no perder la continuidad.", popular: false },
+              { id: 2, name: "Pack 20", price: "$75.000", classes: 20, text: "Para alumnos dedicados que buscan entrenar más veces al mes.", popular: true },
+              { id: 3, name: "Ilimitado", price: "$110.000", classes: 999, text: "Para verdaderos entusiastas. Ven las veces que quieras.", popular: false }
             ].map(plan => (
               <div key={plan.id} className={`bg-white p-8 rounded-3xl flex flex-col h-full border ${plan.popular ? 'border-[#80487b] shadow-2xl shadow-[#80487b]/10 relative' : 'border-gray-100 shadow-sm hover:shadow-md transition-shadow'}`}>
                 {plan.popular && (
@@ -147,7 +147,7 @@ export default function LandingPage({ onLoginClick, onSelectPlan }: LandingPageP
                 
                 <div className="mb-8 border-b border-gray-100 pb-8">
                   <span className="text-4xl font-black font-sans text-gray-900 block mb-1">{plan.price}</span>
-                  <span className="text-sm font-semibold text-[#80487b]">{(plan.classes > 1) ? `${plan.classes} clases mensuales` : '1 única clase'}</span>
+                  <span className="text-sm font-semibold text-[#80487b]">{plan.classes === 999 ? 'Clases ilimitadas mensuales' : (plan.classes > 1) ? `${plan.classes} clases mensuales` : '1 única clase'}</span>
                 </div>
                 
                 <div className="mt-auto pt-2">

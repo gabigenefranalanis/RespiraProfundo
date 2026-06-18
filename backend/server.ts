@@ -32,7 +32,10 @@ const actualPool = process.env.DATABASE_URL ? new Pool({
 // Evitar que el servidor Node.js crashee si la base de datos lanza errores en background (ej. ECONNREFUSED)
 if (actualPool) {
   actualPool.on('error', (err) => {
-    console.error('⚠️ Error inesperado en el cliente de base de datos:', err.message || err);
+    try {
+        const url = new URL(process.env.DATABASE_URL || "");
+        console.error('⚠️ Error inesperado en el cliente de base de datos:', err.message || err, 'Host:', url.hostname, 'Port:', url.port);
+    } catch(e) {}
   });
 }
 
@@ -68,11 +71,11 @@ async function initializeDatabase() {
     }
   } catch (err: any) {
     console.error("❌ Error verificando/inicializando la base de datos:", err.message || err);
-    if (err.code === 'ENOTFOUND' && process.env.DATABASE_URL?.includes('supabase.co')) {
-      console.error("\n💡 TIP para Supabase: El error ENOTFOUND suele ocurrir porque Supabase usa IPv6 por defecto y tu red local no lo soporta.");
+    if ((err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED') && process.env.DATABASE_URL?.includes('supabase')) {
+      console.error("\n💡 TIP para Supabase: El error ENOTFOUND/ECONNREFUSED suele ocurrir porque intentas usar la red IPv6 directamente y el entorno no la soporta (Cloud Run, Docker).");
       console.error("1. Ve a tu panel de Supabase -> Settings -> Database -> Connection String.");
-      console.error("2. Activa la opción 'Use connection pooling' (IPv4) y copia esa URL (termina en el puerto 6543 o usa pooler.supabase.com).");
-      console.error("3. Recuerda codificar caracteres especiales de tu contraseña en la URL (ej: el símbolo '!' debe escribirse como '%21').\n");
+      console.error("2. ASEGÚRATE de activar la opción 'Use connection pooling' (Transaction mode) y copia esa URL (usa el dominio pooler y termina en puerto 6543).");
+      console.error("3. Recuerda codificar caracteres especiales de tu contraseña en la URL.\n");
     }
   }
 }
@@ -91,8 +94,11 @@ async function startServer() {
     try {
       const { rows } = await pool.query("SELECT * FROM users");
       res.json(rows);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
+         return res.status(500).json({ error: "Error de conexión a la BD: Asegúrese de usar la conexión 'Pooler (IPv4)' de Supabase si aplica.", isDbError: true });
+      }
       res.status(500).json({ error: "Error de conexión a la BD." });
     }
   });
